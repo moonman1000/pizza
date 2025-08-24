@@ -10,12 +10,24 @@
     body{font-family:system-ui,Roboto,Arial;background:#0b0d12;color:#e6e9ef;padding:16px}
     #map{height:420px;border-radius:12px;border:1px solid #1d2236}
     input{background:#0f1426;border:1px solid #1d2236;border-radius:10px;color:#e6e9ef;padding:10px;width:100%;margin:8px 0}
-    .btn{appearance:none;border:0;border-radius:10px;padding:10px 12px;background:#3a86ff;color:#fff;cursor:pointer;font-weight:600}
+    .btn{appearance:none;border:0;border-radius:10px;padding:10px 12px;background:#3a86ff;color:#fff;cursor:pointer;font-weight:600;transition:all 0.3s}
+    .btn:hover{background:#2563eb}
+    .btn:disabled{background:#374151;cursor:not-allowed;opacity:0.6}
+    .btn.online{background:#10b981}
+    .status{background:#1f2937;padding:12px;border-radius:8px;margin:12px 0;font-size:14px}
+    .error{background:#dc2626;color:white}
+    .success{background:#059669;color:white}
+    .info{background:#0ea5e9;color:white}
   </style>
 </head>
 <body>
   <h2>App do Motorista</h2>
   <p>Identifique-se rapidamente para aparecer no painel admin.</p>
+  
+  <div id="status" class="status">
+    🔄 Verificando conexão...
+  </div>
+  
   <input id="nome" placeholder="Seu nome"/>
   <input id="placa" placeholder="Placa do veículo (opcional)"/>
   <button class="btn" id="registrar">Entrar online</button>
@@ -24,34 +36,234 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="/socket.io/socket.io.js"></script>
   <script>
-    const socket = io();
-    const map = L.map('map').setView([-23.55,-46.63], 12);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
-    let marker=null; let online=false;
+    // Variáveis globais
+    let socket = null;
+    let map = null;
+    let marker = null; 
+    let online = false;
+    let watchId = null;
+    
+    // Elementos DOM
+    const statusDiv = document.getElementById('status');
+    const nomeInput = document.getElementById('nome');
+    const placaInput = document.getElementById('placa');
+    const registrarBtn = document.getElementById('registrar');
 
-    document.getElementById('registrar').onclick=()=>{
-      const name=document.getElementById('nome').value.trim();
-      const plate=document.getElementById('placa').value.trim();
-      if(!name){ alert('Informe seu nome'); return; }
-      socket.emit('registerDriver',{name,plate});
-      online=true;
-      iniciarWatch();
-    };
-
-    function onPosition(p){
-      const lat=p.coords.latitude, lon=p.coords.longitude;
-      if(marker){ marker.setLatLng([lat,lon]); } else { marker=L.marker([lat,lon]).addTo(map).bindPopup('Você'); }
-      map.setView([lat,lon], 14);
-      if(online){ socket.emit('localizacaoMotorista',{lat,lon}); }
+    // Funções de status
+    function updateStatus(message, type = 'info') {
+      console.log(`[${type.toUpperCase()}]`, message);
+      statusDiv.className = `status ${type}`;
+      statusDiv.innerHTML = message;
     }
-    function onError(err){ console.error(err); alert('Não foi possível obter sua localização.'); }
-    function iniciarWatch(){
-      if(navigator.geolocation){
-        navigator.geolocation.watchPosition(onPosition,onError,{enableHighAccuracy:true,maximumAge:5000,timeout:20000});
-      } else {
-        alert('Seu navegador não suporta geolocalização.');
+
+    // Inicializar mapa
+    function initMap() {
+      try {
+        map = L.map('map').setView([-23.55, -46.63], 12);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          maxZoom: 19,
+          attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+        updateStatus('🗺️ Mapa carregado com sucesso', 'success');
+      } catch (error) {
+        console.error('Erro ao inicializar mapa:', error);
+        updateStatus('❌ Erro ao carregar mapa: ' + error.message, 'error');
       }
     }
+
+    // Inicializar Socket.IO
+    function initSocket() {
+      try {
+        socket = io();
+        
+        socket.on('connect', () => {
+          updateStatus('✅ Conectado ao servidor', 'success');
+          registrarBtn.disabled = false;
+        });
+        
+        socket.on('disconnect', () => {
+          updateStatus('❌ Desconectado do servidor', 'error');
+          registrarBtn.disabled = true;
+          setOffline();
+        });
+        
+        socket.on('connect_error', (error) => {
+          console.error('Erro de conexão:', error);
+          updateStatus('❌ Erro de conexão: ' + error.message, 'error');
+        });
+        
+        // Confirmação de registro do motorista
+        socket.on('driverRegistered', (data) => {
+          updateStatus('✅ Motorista registrado: ' + data.name, 'success');
+          registrarBtn.textContent = 'Online';
+          registrarBtn.className = 'btn online';
+        });
+        
+      } catch (error) {
+        console.error('Erro ao inicializar Socket.IO:', error);
+        updateStatus('❌ Erro ao conectar Socket.IO: ' + error.message, 'error');
+      }
+    }
+
+    // Geolocalização
+    function onPosition(position) {
+      try {
+        const lat = position.coords.latitude;
+        const lon = position.coords.longitude;
+        const accuracy = position.coords.accuracy;
+        
+        console.log('Posição obtida:', { lat, lon, accuracy });
+        
+        if (marker) {
+          marker.setLatLng([lat, lon]);
+        } else {
+          marker = L.marker([lat, lon])
+            .addTo(map)
+            .bindPopup(`Você está aqui<br>Precisão: ${Math.round(accuracy)}m`);
+        }
+        
+        map.setView([lat, lon], 16);
+        
+        if (online && socket && socket.connected) {
+          socket.emit('localizacaoMotorista', { lat, lon, accuracy, timestamp: Date.now() });
+          updateStatus(`📍 Localização enviada (precisão: ${Math.round(accuracy)}m)`, 'success');
+        }
+        
+      } catch (error) {
+        console.error('Erro ao processar posição:', error);
+        updateStatus('❌ Erro ao processar localização: ' + error.message, 'error');
+      }
+    }
+    
+    function onPositionError(error) {
+      console.error('Erro de geolocalização:', error);
+      let message = 'Erro desconhecido';
+      
+      switch(error.code) {
+        case error.PERMISSION_DENIED:
+          message = 'Permissão de localização negada';
+          break;
+        case error.POSITION_UNAVAILABLE:
+          message = 'Localização indisponível';
+          break;
+        case error.TIMEOUT:
+          message = 'Timeout ao obter localização';
+          break;
+      }
+      
+      updateStatus('❌ ' + message, 'error');
+    }
+    
+    function iniciarWatch() {
+      if (!navigator.geolocation) {
+        updateStatus('❌ Seu navegador não suporta geolocalização', 'error');
+        return;
+      }
+      
+      const options = {
+        enableHighAccuracy: true,
+        maximumAge: 5000,
+        timeout: 20000
+      };
+      
+      watchId = navigator.geolocation.watchPosition(onPosition, onPositionError, options);
+      updateStatus('🎯 Monitoramento de localização iniciado', 'info');
+    }
+    
+    function pararWatch() {
+      if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+      }
+    }
+
+    // Estados online/offline
+    function setOnline() {
+      online = true;
+      registrarBtn.textContent = 'Sair offline';
+      registrarBtn.className = 'btn online';
+      iniciarWatch();
+    }
+    
+    function setOffline() {
+      online = false;
+      registrarBtn.textContent = 'Entrar online';
+      registrarBtn.className = 'btn';
+      pararWatch();
+    }
+
+    // Event listener do botão
+    function handleRegistrarClick() {
+      console.log('Botão clicado, online:', online);
+      
+      if (!online) {
+        // Entrar online
+        const name = nomeInput.value.trim();
+        const plate = placaInput.value.trim();
+        
+        if (!name) {
+          alert('Informe seu nome');
+          nomeInput.focus();
+          return;
+        }
+        
+        if (!socket || !socket.connected) {
+          updateStatus('❌ Não conectado ao servidor', 'error');
+          return;
+        }
+        
+        updateStatus('🔄 Registrando motorista...', 'info');
+        registrarBtn.disabled = true;
+        
+        socket.emit('registerDriver', { name, plate, timestamp: Date.now() });
+        setOnline();
+        
+        setTimeout(() => {
+          registrarBtn.disabled = false;
+        }, 1000);
+        
+      } else {
+        // Sair offline
+        setOffline();
+        updateStatus('📴 Motorista offline', 'info');
+        
+        if (socket && socket.connected) {
+          socket.emit('driverOffline');
+        }
+      }
+    }
+
+    // Inicialização
+    document.addEventListener('DOMContentLoaded', () => {
+      console.log('DOM carregado, inicializando...');
+      
+      // Verificar se Socket.IO carregou
+      if (typeof io === 'undefined') {
+        updateStatus('❌ Socket.IO não carregou. Verifique a conexão.', 'error');
+        return;
+      }
+      
+      initMap();
+      initSocket();
+      
+      // Event listener do botão
+      registrarBtn.addEventListener('click', handleRegistrarClick);
+      registrarBtn.disabled = true; // Desabilitar até conectar
+      
+      updateStatus('🔄 Conectando ao servidor...', 'info');
+    });
+
+    // Debug no console
+    window.debugMotorista = {
+      socket: () => socket,
+      online: () => online,
+      marker: () => marker,
+      forcePosition: () => {
+        if (navigator.geolocation) {
+          navigator.geolocation.getCurrentPosition(onPosition, onPositionError);
+        }
+      }
+    };
   </script>
 </body>
 </html>
