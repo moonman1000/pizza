@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Admin — Pizzaria</title>
+  <link rel="stylesheet" href="https://unpkg.com/modern-css-reset/dist/reset.min.css"/>
+  <style>
+    body{font-family:system-ui,Roboto,Arial;background:#0b0d12;color:#e6e9ef}
+    header{display:flex;justify-content:space-between;align-items:center;padding:16px 24px;background:#111423;border-bottom:1px solid #1d2236}
+    main{display:grid;grid-template-columns:2fr 1fr;gap:24px;max-width:1280px;margin:24px auto;padding:0 24px}
+    .panel{background:#12172a;border:1px solid #1d2236;border-radius:16px;padding:16px}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:10px;border-bottom:1px solid #1d2236;text-align:left;font-size:14px}
+    .pill{padding:4px 10px;border-radius:999px;background:#1d2236;color:#9aa4b2;font-size:12px}
+    .btn{appearance:none;border:0;border-radius:10px;padding:8px 10px;background:#3a86ff;color:#fff;cursor:pointer;font-weight:600}
+    select{background:#0f1426;border:1px solid #1d2236;border-radius:10px;color:#e6e9ef;padding:8px;width:100%}
+    #map{height:360px;border-radius:12px}
+  </style>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+</head>
+<body>
+  <header>
+    <div><strong>Admin</strong> — Pizzaria</div>
+    <nav><a href="/loja.html" class="btn">Ir para loja</a></nav>
+  </header>
+  <main>
+    <section class="panel">
+      <h3>Pedidos</h3>
+      <table>
+        <thead>
+          <tr><th>ID</th><th>Status</th><th>Endereço</th><th>ETA</th><th>Motorista</th><th>Ações</th></tr>
+        </thead>
+        <tbody id="orders"></tbody>
+      </table>
+    </section>
+    <aside class="panel">
+      <h3>Motoristas online</h3>
+      <div class="pill" id="driversCount">0 motoristas</div>
+      <div id="drivers"></div>
+      <div id="map" style="margin-top:12px;"></div>
+    </aside>
+  </main>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const socket = io();
+    const map = L.map('map').setView([-15.78,-47.93], 4);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
+    const driverMarkers = new Map();
+
+    async function fetchOrders(){
+      const r = await fetch('/api/admin/orders');
+      const data = await r.json();
+      renderOrders(data);
+    }
+    async function fetchDrivers(){
+      const r = await fetch('/api/admin/drivers');
+      const data = await r.json();
+      renderDrivers(data);
+    }
+
+    function renderOrders(list){
+      const tb = document.getElementById('orders'); tb.innerHTML='';
+      list.forEach(o=>{
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${o.id}</td>
+          <td><span class="pill">${o.status}</span></td>
+          <td>${o.address_text}</td>
+          <td>${o.delivery_eta_min ?? '-'}</td>
+          <td>${o.driver?.name ?? '-'}</td>
+          <td>
+            <select data-order="${o.id}" class="selDriver"></select>
+            <button class="btn" data-assign="${o.id}">Atribuir</button>
+          </td>`;
+        tb.appendChild(tr);
+      });
+      updateDriverSelects();
+      tb.querySelectorAll('button[data-assign]').forEach(b=>b.onclick=assignDriver);
+    }
+
+    function renderDrivers(list){
+      document.getElementById('driversCount').textContent = list.length + ' motoristas';
+      const box = document.getElementById('drivers'); box.innerHTML='';
+      list.forEach(d=>{
+        const div = document.createElement('div');
+        div.className='pill'; div.style.display='inline-block'; div.style.margin='4px 6px 0 0';
+        div.textContent = d.name + (d.plate?(' · '+d.plate):'') + (d.location?(' · '+d.location.lat.toFixed(4)+','+d.location.lon.toFixed(4)) : '');
+        box.appendChild(div);
+        if(d.location){
+          const key=d.id;
+          if(driverMarkers.has(key)){ driverMarkers.get(key).setLatLng([d.location.lat,d.location.lon]); }
+          else {
+            const m=L.marker([d.location.lat,d.location.lon]).addTo(map).bindPopup(d.name);
+            driverMarkers.set(key,m);
+          }
+        }
+      });
+      updateDriverSelects(list);
+    }
+
+    function updateDriverSelects(list=null){
+      const selects = document.querySelectorAll('.selDriver');
+      selects.forEach(async sel=>{
+        if(!list){ const r=await fetch('/api/admin/drivers'); list=await r.json(); }
+        sel.innerHTML = '<option value="">Escolher motorista...</option>' + list.map(d=>`<option value="${d.id}">${d.name} (${d.plate||'sem placa'})</option>`).join('');
+      });
+    }
+
+    async function assignDriver(e){
+      const orderId = e.target.dataset.assign;
+      const sel = document.querySelector('select[data-order="'+orderId+'"]');
+      const driverId = sel.value;
+      if(!driverId){ alert('Selecione um motorista'); return; }
+      const r = await fetch('/api/admin/orders/'+orderId+'/assign-driver',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({driverId})});
+      if(!r.ok){ const d=await r.json(); alert(d.error||'Erro'); return; }
+      await fetchOrders();
+    }
+
+    socket.on('driversUpdate', renderDrivers);
+    socket.on('pedidoAtualizado', ()=>{ fetchOrders(); });
+
+    fetchOrders(); fetchDrivers();
+  </script>
+</body>
+</html>
+
