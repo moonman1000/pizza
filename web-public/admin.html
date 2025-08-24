@@ -3,126 +3,287 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Admin — Pizzaria</title>
+  <title>App do Motorista - Debug</title>
   <link rel="stylesheet" href="https://unpkg.com/modern-css-reset/dist/reset.min.css"/>
-  <style>
-    body{font-family:system-ui,Roboto,Arial;background:#0b0d12;color:#e6e9ef}
-    header{display:flex;justify-content:space-between;align-items:center;padding:16px 24px;background:#111423;border-bottom:1px solid #1d2236}
-    main{display:grid;grid-template-columns:2fr 1fr;gap:24px;max-width:1280px;margin:24px auto;padding:0 24px}
-    .panel{background:#12172a;border:1px solid #1d2236;border-radius:16px;padding:16px}
-    table{width:100%;border-collapse:collapse}
-    th,td{padding:10px;border-bottom:1px solid #1d2236;text-align:left;font-size:14px}
-    .pill{padding:4px 10px;border-radius:999px;background:#1d2236;color:#9aa4b2;font-size:12px}
-    .btn{appearance:none;border:0;border-radius:10px;padding:8px 10px;background:#3a86ff;color:#fff;cursor:pointer;font-weight:600}
-    select{background:#0f1426;border:1px solid #1d2236;border-radius:10px;color:#e6e9ef;padding:8px;width:100%}
-    #map{height:360px;border-radius:12px}
-  </style>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <style>
+    body{font-family:system-ui,Roboto,Arial;background:#0b0d12;color:#e6e9ef;padding:16px}
+    #map{height:420px;border-radius:12px;border:1px solid #1d2236}
+    input{background:#0f1426;border:1px solid #1d2236;border-radius:10px;color:#e6e9ef;padding:10px;width:100%;margin:8px 0}
+    .btn{appearance:none;border:0;border-radius:10px;padding:10px 12px;background:#3a86ff;color:#fff;cursor:pointer;font-weight:600;transition:all 0.3s}
+    .btn:hover{background:#2563eb}
+    .btn:disabled{background:#374151;cursor:not-allowed;opacity:0.6}
+    .btn.online{background:#10b981}
+    .status{background:#1f2937;padding:12px;border-radius:8px;margin:12px 0;font-size:14px}
+    .error{background:#dc2626;color:white}
+    .success{background:#059669;color:white}
+    .info{background:#0ea5e9;color:white}
+    .debug{background:#1f2937;padding:12px;border-radius:8px;margin:12px 0;font-family:monospace;font-size:12px;max-height:200px;overflow-y:auto}
+  </style>
 </head>
 <body>
-  <header>
-    <div><strong>Admin</strong> — Pizzaria</div>
-    <nav><a href="/loja.html" class="btn">Ir para loja</a></nav>
-  </header>
-  <main>
-    <section class="panel">
-      <h3>Pedidos</h3>
-      <table>
-        <thead>
-          <tr><th>ID</th><th>Status</th><th>Endereço</th><th>ETA</th><th>Motorista</th><th>Ações</th></tr>
-        </thead>
-        <tbody id="orders"></tbody>
-      </table>
-    </section>
-    <aside class="panel">
-      <h3>Motoristas online</h3>
-      <div class="pill" id="driversCount">0 motoristas</div>
-      <div id="drivers"></div>
-      <div id="map" style="margin-top:12px;"></div>
-    </aside>
-  </main>
+  <h2>App do Motorista - Debug</h2>
+  <p>Teste de comunicação com o servidor</p>
+  
+  <div id="status" class="status">
+    🔄 Inicializando...
+  </div>
+  
+  <input id="nome" placeholder="Seu nome" value="João Teste"/>
+  <input id="placa" placeholder="Placa do veículo" value="ABC-1234"/>
+  <button class="btn" id="registrar">Entrar online</button>
+  
+  <div class="debug" id="debug">
+    <strong>Debug Log:</strong><br>
+  </div>
+  
+  <div id="map" style="margin-top:12px;"></div>
 
-  <script src="/socket.io/socket.io.js"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/socket.io/socket.io.js"></script>
   <script>
-    const socket = io();
-    const map = L.map('map').setView([-15.78,-47.93], 4);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
-    const driverMarkers = new Map();
+    // Variáveis globais
+    let socket = null;
+    let map = null;
+    let marker = null; 
+    let online = false;
+    
+    // Elementos DOM
+    const statusDiv = document.getElementById('status');
+    const debugDiv = document.getElementById('debug');
+    const nomeInput = document.getElementById('nome');
+    const placaInput = document.getElementById('placa');
+    const registrarBtn = document.getElementById('registrar');
 
-    async function fetchOrders(){
-      const r = await fetch('/api/admin/orders');
-      const data = await r.json();
-      renderOrders(data);
-    }
-    async function fetchDrivers(){
-      const r = await fetch('/api/admin/drivers');
-      const data = await r.json();
-      renderDrivers(data);
-    }
-
-    function renderOrders(list){
-      const tb = document.getElementById('orders'); tb.innerHTML='';
-      list.forEach(o=>{
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td>${o.id}</td>
-          <td><span class="pill">${o.status}</span></td>
-          <td>${o.address_text}</td>
-          <td>${o.delivery_eta_min ?? '-'}</td>
-          <td>${o.driver?.name ?? '-'}</td>
-          <td>
-            <select data-order="${o.id}" class="selDriver"></select>
-            <button class="btn" data-assign="${o.id}">Atribuir</button>
-          </td>`;
-        tb.appendChild(tr);
-      });
-      updateDriverSelects();
-      tb.querySelectorAll('button[data-assign]').forEach(b=>b.onclick=assignDriver);
+    // Log debug
+    function debugLog(message, data = null) {
+      const timestamp = new Date().toLocaleTimeString();
+      console.log(`[${timestamp}]`, message, data || '');
+      debugDiv.innerHTML += `<br>[${timestamp}] ${message}`;
+      if (data) {
+        debugDiv.innerHTML += `<br>  Data: ${JSON.stringify(data, null, 2)}`;
+      }
+      debugDiv.scrollTop = debugDiv.scrollHeight;
     }
 
-    function renderDrivers(list){
-      document.getElementById('driversCount').textContent = list.length + ' motoristas';
-      const box = document.getElementById('drivers'); box.innerHTML='';
-      list.forEach(d=>{
-        const div = document.createElement('div');
-        div.className='pill'; div.style.display='inline-block'; div.style.margin='4px 6px 0 0';
-        div.textContent = d.name + (d.plate?(' · '+d.plate):'') + (d.location?(' · '+d.location.lat.toFixed(4)+','+d.location.lon.toFixed(4)) : '');
-        box.appendChild(div);
-        if(d.location){
-          const key=d.id;
-          if(driverMarkers.has(key)){ driverMarkers.get(key).setLatLng([d.location.lat,d.location.lon]); }
-          else {
-            const m=L.marker([d.location.lat,d.location.lon]).addTo(map).bindPopup(d.name);
-            driverMarkers.set(key,m);
-          }
+    // Funções de status
+    function updateStatus(message, type = 'info') {
+      statusDiv.className = `status ${type}`;
+      statusDiv.innerHTML = message;
+      debugLog(`Status: ${message} (${type})`);
+    }
+
+    // Inicializar mapa
+    function initMap() {
+      try {
+        map = L.map('map').setView([-23.55, -46.63], 12);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          maxZoom: 19,
+          attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+        updateStatus('🗺️ Mapa carregado', 'success');
+      } catch (error) {
+        debugLog('Erro no mapa:', error);
+        updateStatus('❌ Erro no mapa', 'error');
+      }
+    }
+
+    // Testar APIs
+    async function testAPIs() {
+      debugLog('🔍 Testando APIs do servidor...');
+      
+      try {
+        // Testar health check
+        const healthResponse = await fetch('/healthz');
+        if (healthResponse.ok) {
+          const healthData = await healthResponse.json();
+          debugLog('✅ Health check OK:', healthData);
+        } else {
+          debugLog('❌ Health check falhou:', healthResponse.status);
         }
-      });
-      updateDriverSelects(list);
+      } catch (error) {
+        debugLog('❌ Erro no health check:', error.message);
+      }
+      
+      try {
+        // Testar API de motoristas
+        const driversResponse = await fetch('/api/admin/drivers');
+        if (driversResponse.ok) {
+          const driversData = await driversResponse.json();
+          debugLog('✅ API drivers OK:', driversData);
+        } else {
+          debugLog('❌ API drivers falhou:', driversResponse.status);
+        }
+      } catch (error) {
+        debugLog('❌ Erro na API drivers:', error.message);
+      }
     }
 
-    function updateDriverSelects(list=null){
-      const selects = document.querySelectorAll('.selDriver');
-      selects.forEach(async sel=>{
-        if(!list){ const r=await fetch('/api/admin/drivers'); list=await r.json(); }
-        sel.innerHTML = '<option value="">Escolher motorista...</option>' + list.map(d=>`<option value="${d.id}">${d.name} (${d.plate||'sem placa'})</option>`).join('');
-      });
+    // Inicializar Socket.IO
+    function initSocket() {
+      debugLog('🔌 Iniciando Socket.IO...');
+      
+      try {
+        // Verificar se Socket.IO está disponível
+        if (typeof io === 'undefined') {
+          updateStatus('❌ Socket.IO não carregou', 'error');
+          return;
+        }
+        
+        socket = io();
+        
+        // Event listeners do socket
+        socket.on('connect', () => {
+          debugLog('✅ Socket conectado, ID:', socket.id);
+          updateStatus('✅ Conectado ao servidor', 'success');
+          registrarBtn.disabled = false;
+        });
+        
+        socket.on('disconnect', (reason) => {
+          debugLog('❌ Socket desconectado:', reason);
+          updateStatus('❌ Desconectado', 'error');
+          registrarBtn.disabled = true;
+        });
+        
+        socket.on('connect_error', (error) => {
+          debugLog('❌ Erro de conexão:', error.message);
+          updateStatus('❌ Erro de conexão', 'error');
+        });
+        
+        // Escutar TODOS os eventos para debug
+        socket.onAny((eventName, ...args) => {
+          debugLog(`📨 Evento recebido: ${eventName}`, args);
+        });
+        
+        // Eventos específicos do motorista
+        socket.on('driverRegistered', (data) => {
+          debugLog('✅ Motorista registrado:', data);
+          updateStatus('✅ Registrado como: ' + (data.name || 'motorista'), 'success');
+          setOnlineState();
+        });
+        
+        socket.on('driversUpdate', (data) => {
+          debugLog('📊 Atualização de motoristas:', data);
+        });
+        
+      } catch (error) {
+        debugLog('❌ Erro ao inicializar socket:', error);
+        updateStatus('❌ Erro no Socket.IO', 'error');
+      }
     }
 
-    async function assignDriver(e){
-      const orderId = e.target.dataset.assign;
-      const sel = document.querySelector('select[data-order="'+orderId+'"]');
-      const driverId = sel.value;
-      if(!driverId){ alert('Selecione um motorista'); return; }
-      const r = await fetch('/api/admin/orders/'+orderId+'/assign-driver',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({driverId})});
-      if(!r.ok){ const d=await r.json(); alert(d.error||'Erro'); return; }
-      await fetchOrders();
+    // Estados do botão
+    function setOnlineState() {
+      online = true;
+      registrarBtn.textContent = 'Sair offline';
+      registrarBtn.className = 'btn online';
+    }
+    
+    function setOfflineState() {
+      online = false;
+      registrarBtn.textContent = 'Entrar online';
+      registrarBtn.className = 'btn';
     }
 
-    socket.on('driversUpdate', renderDrivers);
-    socket.on('pedidoAtualizado', ()=>{ fetchOrders(); });
+    // Geolocalização
+    function onPosition(position) {
+      const lat = position.coords.latitude;
+      const lon = position.coords.longitude;
+      const accuracy = position.coords.accuracy;
+      
+      debugLog('📍 Posição obtida:', { lat, lon, accuracy });
+      
+      if (marker) {
+        marker.setLatLng([lat, lon]);
+      } else {
+        marker = L.marker([lat, lon])
+          .addTo(map)
+          .bindPopup(`Você<br>Precisão: ${Math.round(accuracy)}m`);
+      }
+      
+      map.setView([lat, lon], 16);
+      
+      if (online && socket && socket.connected) {
+        const locationData = { lat, lon, accuracy, timestamp: Date.now() };
+        socket.emit('localizacaoMotorista', locationData);
+        debugLog('📡 Localização enviada:', locationData);
+      }
+    }
+    
+    function onPositionError(error) {
+      debugLog('❌ Erro de geolocalização:', { code: error.code, message: error.message });
+      updateStatus('❌ Erro de localização', 'error');
+    }
 
-    fetchOrders(); fetchDrivers();
+    // Event listener do botão
+    function handleRegistrarClick() {
+      debugLog('🖱️ Botão clicado, estado online:', online);
+      
+      if (!online) {
+        // Entrar online
+        const name = nomeInput.value.trim();
+        const plate = placaInput.value.trim();
+        
+        if (!name) {
+          alert('Informe seu nome');
+          return;
+        }
+        
+        if (!socket || !socket.connected) {
+          updateStatus('❌ Socket não conectado', 'error');
+          debugLog('❌ Tentativa de registro sem conexão');
+          return;
+        }
+        
+        const driverData = { name, plate, timestamp: Date.now() };
+        debugLog('📤 Enviando registerDriver:', driverData);
+        
+        socket.emit('registerDriver', driverData);
+        updateStatus('🔄 Registrando...', 'info');
+        
+        // Iniciar geolocalização
+        if (navigator.geolocation) {
+          navigator.geolocation.watchPosition(onPosition, onPositionError, {
+            enableHighAccuracy: true,
+            maximumAge: 5000,
+            timeout: 20000
+          });
+          debugLog('🎯 Geolocalização iniciada');
+        }
+        
+      } else {
+        // Sair offline
+        debugLog('📤 Enviando driverOffline');
+        socket.emit('driverOffline');
+        setOfflineState();
+        updateStatus('📴 Offline', 'info');
+      }
+    }
+
+    // Inicialização
+    document.addEventListener('DOMContentLoaded', () => {
+      debugLog('🚀 Aplicação iniciada');
+      
+      initMap();
+      initSocket();
+      testAPIs();
+      
+      registrarBtn.addEventListener('click', handleRegistrarClick);
+      registrarBtn.disabled = true;
+    });
+
+    // Funções globais para debug no console
+    window.debugMotorista = {
+      socket: () => socket,
+      enviarTeste: () => {
+        if (socket) {
+          socket.emit('teste', { message: 'teste do console', timestamp: Date.now() });
+          debugLog('📤 Teste enviado via console');
+        }
+      },
+      status: () => ({ online, connected: socket?.connected, id: socket?.id }),
+      clearDebug: () => { debugDiv.innerHTML = '<strong>Debug Log:</strong><br>'; }
+    };
   </script>
 </body>
 </html>
